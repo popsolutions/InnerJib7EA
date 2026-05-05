@@ -9,7 +9,8 @@ endif
 EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNUSEDSIGNAL -Wno-UNUSEDPARAM \
               -Wno-ASCRANGE -Wno-CASEINCOMPLETE -Wno-INITIALDLY \
               -Wno-MULTIDRIVEN -Wno-LATCH -Wno-IMPLICIT -Wno-COMBDLY \
-              -Wno-PROCASSWIRE -Wno-UNOPTFLAT
+              -Wno-PROCASSWIRE -Wno-UNOPTFLAT \
+              -Wno-IMPLICITSTATIC
 
 PROJECT_ROOT = $(shell git rev-parse --show-toplevel)
 MAST = $(PROJECT_ROOT)/mast
