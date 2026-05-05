@@ -4,22 +4,39 @@
 
 > First Sail of the PopSolutions fleet. The validation tape-out.
 
+[![ci](https://github.com/popsolutions/InnerJib7EA/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/popsolutions/InnerJib7EA/actions/workflows/ci.yml)
+
 **InnerJib7EA** is the first silicon product of PopSolutions Sails. SKU
 **POPC_16A** — embedded entry single-board RISC-V accelerator with 16 GB DDR5,
 targeting edge AI inference and on-device fine-tuning.
 
 This is a deliberately small first silicon: monolithic die in Skywater 130nm
 via Google Open MPW shuttle, low cost, low risk. The goal is to validate the
-end-to-end design flow (RTL → simulation → synthesis → P&R → tape-out → driver
-→ application) with the smallest possible blast radius. Lessons from
-InnerJib7EA inform the chiplet-based ForeTopsail7EA and MainTopsail7EA that
-follow.
+end-to-end design flow with the smallest possible blast radius.
 
 ## Status
 
-Starting (2026-05). RTL integration in progress. See open issues.
+**Sprint C (`inner_jib_top.sv` end-to-end integration) landed.** A real
+RISC-V program (`mast/examples/direct/sum_ints.asm`) now runs through:
 
-## Quick spec (target — to be locked via ADR in this repo)
+```
+upstream core.sv -> core_axi4_adapter -> axi4_master_simple -> axi4_mem_model
+```
+
+The cocotb test pre-populates instruction memory through the mem model's
+loader back-door (added in [MAST#8](https://github.com/popsolutions/MAST/pull/8)),
+sets the core's PC, and asserts ena. The core then fetches instructions,
+executes the loop, and emits the expected output sequence `[0, 5, 4, 3, 2,
+1, 0, 15]` before halting.
+
+This is the first program of any kind running on PopSolutions silicon-
+equivalent hardware in simulation. Every subsequent program (factorial,
+primes, matrix multiply, eventually GGML kernels) lands on the same path.
+
+See [`docs/adr/0001-spec.md`](docs/adr/0001-spec.md) for the locked POPC_16A
+specification.
+
+## Quick spec
 
 | Parameter | Target |
 |---|---|
@@ -28,44 +45,57 @@ Starting (2026-05). RTL integration in progress. See open issues.
 | DRAM | 16 GB DDR5-4800 SO-DIMM (single channel) |
 | Host | PCIe Gen4 x4 (via LitePCIe) |
 | TDP | < 25 W |
-| Form factor | Mini-ITX SBC + M.2 accelerator variant |
+| Form factor | M.2 22110 NGFF accelerator card |
 | Reference workload | GGML int4 inference of TinyLlama-1.1B |
 | BOM target | R$ 800–1500 |
 
-## How this repo relates to MAST
+## Run the testbench locally
+
+One-time setup:
+
+```bash
+git clone --recursive git@git.pop.coop:pop/InnerJib7EA.git
+cd InnerJib7EA
+~/.pyenv/versions/3.12.10/bin/python3 -m venv mast/verif/.venv
+source mast/verif/.venv/bin/activate
+pip install cocotb cocotb-bus pytest
+deactivate
+ln -s ../mast/verif/.venv verif/.venv
+```
+
+Run:
+
+```bash
+source verif/.venv/bin/activate
+cd verif/inner_jib_top
+make
+```
+
+Expected output ends with:
+
+```
+** TESTS=2 PASS=2 FAIL=0 SKIP=0 **
+```
+
+## Relationship to MAST
 
 InnerJib7EA vendors [`popsolutions/MAST`](https://github.com/popsolutions/MAST)
 as a git submodule under `mast/`. MAST holds the shared IP (RISC-V core,
-compute unit, memory controller, AXI4 interconnect, verification harness).
-This repo holds only product-specific integration: top-level Verilog,
-configuration, PCB design, datasheets, product tests.
+compute unit, AXI4 subsystem, verification harness). This repo holds only
+product-specific integration: top-level Verilog (`src/inner_jib_top.sv`),
+spec ADRs, eventually PCB design files, datasheets, product tests.
 
-When InnerJib7EA tape-outs to silicon, the MAST submodule is frozen at the
-specific MAST release used. That submodule pin is the reproducibility
-contract.
+When InnerJib7EA tape-outs to silicon, the MAST submodule pin is frozen at
+the specific MAST release used. That pin is the reproducibility contract.
 
 ## License
 
 Same dual-license model as MAST. See
-[`popsolutions/MAST/NOTICE.md`](https://github.com/popsolutions/MAST/blob/main/NOTICE.md):
-
-- Hardware contributions: CERN-OHL-S v2 (commercial dual-license available)
-- Software contributions: Apache 2.0
-- Documentation: CC-BY-SA 4.0
+[`mast/NOTICE.md`](https://github.com/popsolutions/MAST/blob/main/NOTICE.md).
 
 ## Contributing
 
-See [`popsolutions/MAST/CONTRIBUTING.md`](https://github.com/popsolutions/MAST/blob/main/CONTRIBUTING.md).
+See [`mast/CONTRIBUTING.md`](https://github.com/popsolutions/MAST/blob/main/CONTRIBUTING.md)
+and the cooperative-affiliate-only policy in
+[`mast/GOVERNANCE.md`](https://github.com/popsolutions/MAST/blob/main/GOVERNANCE.md).
 DCO sign-off required on every commit (`git commit -s`).
-
-## Roadmap
-
-See open issues. Major milestones for InnerJib7EA:
-
-1. Lock spec (this repo, ADR-001-spec)
-2. Top-level Verilog integration with MAST submodule
-3. Verilator simulation runs end-to-end (TinyLlama-1.1B inference)
-4. RTL synthesis area/timing report
-5. Skywater 130nm Open MPW shuttle submission
-6. First silicon validation
-7. Driver + GGML backend hand-off to Spanker7EA
