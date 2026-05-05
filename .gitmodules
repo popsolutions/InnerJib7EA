@@ -1,3 +1,8 @@
 [submodule "mast"]
 	path = mast
-	url = git@git.pop.coop:pop/MAST.git
+	# Use HTTPS so GitHub Actions CI (which has no SSH key for git.pop.coop)
+	# can clone the submodule. Local developers with SSH set up can still
+	# override via:
+	#   git config submodule.mast.url git@git.pop.coop:pop/MAST.git
+	url = https://git.pop.coop/pop/MAST.git
+	branch = main
