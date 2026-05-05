@@ -1,0 +1,10 @@
+
+# verif outputs
+verif/.venv
+verif/**/sim_build/
+verif/**/results.xml
+verif/**/*.vcd
+verif/**/*.fst
+**/__pycache__/
+*.pyc
+.pytest_cache/
