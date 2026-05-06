@@ -52,7 +52,11 @@ For each of 4 lanes, per direction:
 Plus shared signals:
 
 - 1 differential clock pair (`CLK_P` / `CLK_N`) → **2 pins**
-  (forwarded source-synchronous clock from the upstream card)
+  (forwarded source-synchronous clock — **direction is role-dependent**:
+  the upstream card *drives* the pair as **output**, the downstream card
+  *consumes* it as **input**. Per-role RTL surfaces live in
+  `src/intercard_link_upstream.sv` and `src/intercard_link_downstream.sv`;
+  see [ADR-003](../adr/0003-intercard-link-role-split.md).)
 - 1 single-ended reset (`RESET_N`) → **1 pin**
   (active-low, asserted by either card to force link re-train)
 - 1 single-ended presence-detect (`PRSNT_N`) → **1 pin**
@@ -162,11 +166,11 @@ bottom-right, pin 40 is top-right.
 |  11 | TX3_P      | OUT       | 12           | Lane 3 transmit positive                       |
 |  12 | TX3_N      | OUT       | 11           | Lane 3 transmit negative                       |
 |  13 | GND        | PWR       | —            | Crosstalk isolation                            |
-|  14 | CLK_P      | OUT       | 15           | Forwarded source-synchronous clock positive    |
-|  15 | CLK_N      | OUT       | 14           | Forwarded source-synchronous clock negative    |
+|  14 | CLK_P      | OUT/IN†   | 15           | Forwarded source-synchronous clock positive (†OUT on upstream card, IN on downstream card — see ADR-003) |
+|  15 | CLK_N      | OUT/IN†   | 14           | Forwarded source-synchronous clock negative (†OUT on upstream card, IN on downstream card — see ADR-003) |
 |  16 | GND        | PWR       | —            | Clock shielding                                |
 |  17 | RESET_N    | I/O       | —            | Active-low link reset (open-drain, pull-up upstream) |
-|  18 | PRSNT_N    | IN        | —            | Active-low presence detect (downstream pulls low) |
+|  18 | PRSNT_N    | IN/OUT†   | —            | Active-low presence detect (†IN on upstream card, OUT on downstream card — downstream pulls low — see ADR-003) |
 |  19 | SMB_CLK    | I/O       | —            | Sideband I2C clock (100 kHz default, 3.3 V open-drain) |
 |  20 | SMB_DAT    | I/O       | —            | Sideband I2C data                              |
 |  21 | GND        | PWR       | —            | End shield (mirror)                            |
@@ -252,10 +256,18 @@ without conversion.
 
 ## 6. SystemVerilog port-surface contract
 
-The corresponding RTL stub at `src/intercard_link.sv` declares:
+The connector pinout in §4 is fixed regardless of which card role
+occupies a given board position. The RTL surface, however, **splits by
+role** because `CLK_P` / `CLK_N` flip direction per role (see [ADR-003](../adr/0003-intercard-link-role-split.md)).
+Two stub modules are provided:
+
+### 6.1 Upstream-card role — `src/intercard_link_upstream.sv`
+
+The upstream card *drives* the forwarded clock pair *out* to the
+connector. `prsnt_n` is consumed as input.
 
 ```systemverilog
-module intercard_link #(
+module intercard_link_upstream #(
     parameter int INTERCARD_LANES      = 4,
     parameter int INTERCARD_LANE_WIDTH = 32
 )(
@@ -267,7 +279,7 @@ module intercard_link #(
     // 4 differential RX pairs
     input  wire [INTERCARD_LANES-1:0]    rx_p,
     input  wire [INTERCARD_LANES-1:0]    rx_n,
-    // Forwarded clock
+    // Forwarded clock — UPSTREAM drives this OUT
     output wire                          clk_p,
     output wire                          clk_n,
     // Sideband
@@ -278,12 +290,50 @@ module intercard_link #(
 );
 ```
 
-This stub has no body in this PR (it is a port-surface contract, not a
-transceiver implementation). The real transceiver and 8b/10b PCS land
+### 6.2 Downstream-card role — `src/intercard_link_downstream.sv`
+
+The downstream card *consumes* the forwarded clock pair *as input* and
+recovers it for RX time alignment. `prsnt_n` is driven low (output) so
+the upstream sees logic-0 = neighbor present.
+
+```systemverilog
+module intercard_link_downstream #(
+    parameter int INTERCARD_LANES      = 4,
+    parameter int INTERCARD_LANE_WIDTH = 32
+)(
+    input  wire                          ref_clk,
+    input  wire                          rst_n,
+    // 4 differential TX pairs
+    output wire [INTERCARD_LANES-1:0]    tx_p,
+    output wire [INTERCARD_LANES-1:0]    tx_n,
+    // 4 differential RX pairs
+    input  wire [INTERCARD_LANES-1:0]    rx_p,
+    input  wire [INTERCARD_LANES-1:0]    rx_n,
+    // Forwarded clock — DOWNSTREAM consumes this IN
+    input  wire                          clk_p,
+    input  wire                          clk_n,
+    // Sideband
+    output wire                          prsnt_n,
+    inout  wire                          reset_n,
+    inout  wire                          smb_clk,
+    inout  wire                          smb_dat
+);
+```
+
+### 6.3 Common contract
+
+Both stubs have no body in this PR (port-surface contracts only, not
+transceiver implementations). The real transceiver and 8b/10b PCS land
 in a separate PR after the intercard line-coding ADR.
 
 The bus width contract `INTERCARD_BUS_WIDTH = INTERCARD_LANES * INTERCARD_LANE_WIDTH = 128`
-is asserted by the smoke-test in `verif/intercard_link/`.
+is asserted at elaboration time inside both modules and by the smoke
+tests in `verif/intercard_link/` (`test_widths.sv` and
+`test_two_card_pair.sv`). The CLK-direction split is enforced
+structurally by `test_two_card_pair.sv`, which wires the upstream's
+`clk_p`/`clk_n` outputs into the downstream's `clk_p`/`clk_n` inputs on
+the same shared net — Verilator rejects any future regression that
+flips the direction. See [ADR-003](../adr/0003-intercard-link-role-split.md).
 
 ## 7. Validation in this PR
 

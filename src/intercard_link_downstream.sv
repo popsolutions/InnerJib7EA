@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 PopSolutions Cooperative
 //
-// intercard_link — port-surface contract for the InnerJib7EA inter-card link.
+// intercard_link_downstream — port-surface contract for the InnerJib7EA
+// inter-card link, **downstream-card role** (clock-receiving side).
 //
-// This module is a STUB. It declares the port surface that physically maps
-// to the 40-pin board-to-board connector specified in:
+// Role:
+//   This module models a card that is the SINK of the forwarded
+//   source-synchronous clock on the inter-card connector — i.e., it
+//   CONSUMES `clk_p`/`clk_n` as INPUT from the connector, and uses the
+//   recovered clock to time-align the RX serializer.
+//
+//   The upstream-card role (which DRIVES the clock out) lives in
+//   src/intercard_link_upstream.sv. The two roles share the same
+//   connector pinout — only the CLK pair direction flips, per
+//   docs/hw/intercard-connector-pinout.md §2.1 §6 and ADR-003.
+//
+// This module is a STUB. It declares the port surface that physically
+// maps to the 40-pin board-to-board connector specified in:
 //
 //   docs/hw/intercard-connector-pinout.md   — pinout, electrical targets
-//   docs/adr/0002-intercard-connector.md    — decision rationale
+//   docs/adr/0002-intercard-connector.md    — connector decision rationale
+//   docs/adr/0003-intercard-link-role-split.md — upstream/downstream split
 //
 // The body of this module (transceiver, 8b/10b PCS, link bring-up FSM,
 // AXI4-Stream upstream interface) is NOT implemented in this PR. It will
@@ -25,7 +38,7 @@
 
 `default_nettype none
 
-module intercard_link #(
+module intercard_link_downstream #(
     // Width contract — see docs/hw/intercard-connector-pinout.md §2.
     // INTERCARD_LANES * INTERCARD_LANE_WIDTH must equal 128 (the
     // INTERCARD_BUS_WIDTH of the MAST #14 contract).
@@ -33,6 +46,9 @@ module intercard_link #(
     parameter int INTERCARD_LANE_WIDTH = 32
 )(
     // --- Reference clock / reset (from on-card PLL, NOT from connector) ---
+    // Note: ref_clk is the LOCAL on-card PLL output. The recovered
+    // forwarded clock (clk_p / clk_n inputs below) is a SEPARATE clock
+    // domain used for RX time alignment, not as the module's primary clock.
     input  wire                        ref_clk,
     input  wire                        rst_n,
 
@@ -49,16 +65,16 @@ module intercard_link #(
     input  wire [INTERCARD_LANES-1:0]  rx_n,
 
     // --- Forwarded source-synchronous clock differential pair ---
-    // Driven by the upstream card; mapped to connector pins CLK_P (14),
-    // CLK_N (15). Receiver-side cards strap the pads as inputs and use
-    // the recovered clock to time-align the RX serializer.
-    output wire                        clk_p,
-    output wire                        clk_n,
+    // DOWNSTREAM ROLE: this card RECEIVES the clock from the connector
+    // (pins CLK_P (14), CLK_N (15)). Driven by the upstream-card
+    // intercard_link_upstream instance on the mating card.
+    input  wire                        clk_p,
+    input  wire                        clk_n,
 
     // --- Sideband single-ended ---
-    // PRSNT_N (pin 18): downstream card pulls this low; upstream card
-    // sees logic-0 = neighbor present. Pure input on this card.
-    input  wire                        prsnt_n,
+    // PRSNT_N (pin 18): downstream card pulls this low (so the upstream
+    // card sees logic-0 = neighbor present). Output on this card.
+    output wire                        prsnt_n,
 
     // RESET_N (pin 17): open-drain, bidirectional. Either card can
     // assert (drive low) to force a link re-train.
@@ -86,7 +102,7 @@ module intercard_link #(
 
     generate
         if (INTERCARD_BUS_WIDTH != 128) begin : g_width_contract_broken
-            $error("intercard_link: INTERCARD_LANES (%0d) * INTERCARD_LANE_WIDTH (%0d) = %0d, expected 128 (MAST #14 contract).",
+            $error("intercard_link_downstream: INTERCARD_LANES (%0d) * INTERCARD_LANE_WIDTH (%0d) = %0d, expected 128 (MAST #14 contract).",
                    INTERCARD_LANES, INTERCARD_LANE_WIDTH, INTERCARD_BUS_WIDTH);
         end
     endgenerate
@@ -96,10 +112,12 @@ module intercard_link #(
     // warn about unconnected drivers. The real transceiver replaces this
     // with the SerDes + 8b/10b PCS + AXI4-Stream upstream.
     // ------------------------------------------------------------------
-    assign tx_p  = '0;
-    assign tx_n  = '1;        // diff complement of tx_p
-    assign clk_p = ref_clk;
-    assign clk_n = ~ref_clk;
+    assign tx_p    = '0;
+    assign tx_n    = '1;       // diff complement of tx_p
+    // PRSNT_N: downstream card asserts low so the upstream sees logic-0
+    // = neighbor present. The real implementation will drive this from
+    // a board-strap / power-good signal; for now, hold it asserted.
+    assign prsnt_n = 1'b0;
 
     // High-Z on bidirectional sideband until the link FSM is implemented.
     assign reset_n = 1'bz;
@@ -107,8 +125,10 @@ module intercard_link #(
     assign smb_dat = 1'bz;
 
     // Suppress unused-input lint by tying off in a synthesizable no-op.
+    // clk_p / clk_n are inputs on this role; the body of the future
+    // transceiver will use them for RX time alignment.
     /* verilator lint_off UNUSED */
-    wire _unused = &{1'b0, rx_p, rx_n, prsnt_n, rst_n};
+    wire _unused = &{1'b0, rx_p, rx_n, clk_p, clk_n, rst_n, ref_clk};
     /* verilator lint_on UNUSED */
 
 endmodule
