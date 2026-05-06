@@ -21,7 +21,7 @@ MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve
 # update this constant in a follow-up commit. We deliberately do not pin a
 # hash we cannot verify locally (no network access during bootstrap).
 # Set EXPECTED_SHA256="" to skip verification temporarily (NOT for CI).
-EXPECTED_SHA256="${EXPECTED_SHA256:-PLACEHOLDER_UPDATE_AFTER_FIRST_FETCH}"
+EXPECTED_SHA256="${EXPECTED_SHA256:-da3087fb14aede55fde6eb81a0e55e886810e43509ec82ecdc7aa5d62a03b556}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_PATH="${SCRIPT_DIR}/${MODEL_FILE}"
