@@ -3,7 +3,7 @@
 
 # ADR-002 — Inter-card connector for InnerJib7EA / POPC_16A
 
-**Status:** Proposed (2026-05-06) — supersedes the "**No NVLink-equivalent.
+**Status:** Accepted (2026-05-06) — supersedes the "**No NVLink-equivalent.
 No inter-card link in Gen A; multi-card scenarios fall back to PCIe
 peer-to-peer.**" clause of ADR-001 §Host-interface (line 52–53). Note that
 the *companion* form-factor amendment (M.2 → Mini-ITX) lives on the Stays
