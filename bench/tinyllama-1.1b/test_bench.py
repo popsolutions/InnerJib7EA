@@ -28,8 +28,28 @@ EXPECTED_BASELINE = Path(__file__).parent / "expected_baseline.json"
 def _run_bench(*extra_args: str) -> dict:
     """Invoke bench.py --dry-run and return the parsed JSON record."""
     cmd = [sys.executable, str(BENCH_PY), "--dry-run", *extra_args]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    # 30 s is generous for the dry-run path (no model load). Without a timeout
+    # a hang here would block the whole CI job up to its 30-min ceiling.
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, timeout=30
+    )
     return json.loads(result.stdout)
+
+
+def _run_bench_with_check(baseline_path: Path, *extra_args: str) -> subprocess.CompletedProcess:
+    """Invoke bench.py --dry-run --check <baseline> and return the raw process result.
+
+    Does NOT pass check=True — caller asserts on returncode.
+    """
+    cmd = [
+        sys.executable,
+        str(BENCH_PY),
+        "--dry-run",
+        "--check",
+        str(baseline_path),
+        *extra_args,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
 
 # --- Schema field presence --------------------------------------------------
@@ -156,3 +176,123 @@ def test_expected_baseline_schema_version_matches():
     data = json.loads(EXPECTED_BASELINE.read_text())
     record = _run_bench()
     assert data["schema_version"] == record["schema_version"]
+
+
+# --- check_threshold / --check exit-code path ------------------------------
+#
+# The dry-run backend in bench.py emits exactly 10.0 tokens/sec
+# (synthetic_rate = 10.0, n_tokens generated in n_tokens/10 seconds).
+# Tests below pin baselines on either side of that to verify the exit-code
+# contract.
+
+DRY_RUN_TOKENS_PER_SEC = 10.0
+
+
+def _write_baseline(path: Path, **fields) -> Path:
+    """Write a minimal baseline JSON with the supplied threshold fields."""
+    payload = {"schema_version": "1", **fields}
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_check_passes_when_min_tps_below_synthetic(tmp_path):
+    """Threshold below synthetic rate → exit 0."""
+    baseline = _write_baseline(
+        tmp_path / "baseline.json",
+        min_tokens_per_sec=DRY_RUN_TOKENS_PER_SEC - 1.0,
+    )
+    result = _run_bench_with_check(baseline)
+    assert result.returncode == 0, (
+        f"expected exit 0, got {result.returncode}; stderr={result.stderr}"
+    )
+
+
+def test_check_fails_when_min_tps_above_synthetic(tmp_path):
+    """Threshold above synthetic rate → non-zero exit + identifying message."""
+    baseline = _write_baseline(
+        tmp_path / "baseline.json",
+        min_tokens_per_sec=DRY_RUN_TOKENS_PER_SEC + 5.0,
+    )
+    result = _run_bench_with_check(baseline)
+    assert result.returncode != 0, (
+        f"expected non-zero exit, got 0; stdout={result.stdout}"
+    )
+    assert "min_tokens_per_sec" in result.stderr
+    assert "FAIL" in result.stderr
+
+
+def test_check_passes_when_max_wall_clock_above_actual(tmp_path):
+    """wall_clock ceiling > measured → exit 0."""
+    # Default n-tokens=64 → 64/10 = 6.4 s synthetic wall clock.
+    baseline = _write_baseline(
+        tmp_path / "baseline.json",
+        max_wall_clock_seconds=60.0,
+    )
+    result = _run_bench_with_check(baseline)
+    assert result.returncode == 0, (
+        f"expected exit 0, got {result.returncode}; stderr={result.stderr}"
+    )
+
+
+def test_check_fails_when_max_wall_clock_below_actual(tmp_path):
+    """wall_clock ceiling < measured → non-zero exit + identifying message."""
+    baseline = _write_baseline(
+        tmp_path / "baseline.json",
+        max_wall_clock_seconds=0.1,  # well below 6.4 s synthetic
+    )
+    result = _run_bench_with_check(baseline)
+    assert result.returncode != 0
+    assert "max_wall_clock_seconds" in result.stderr
+    assert "FAIL" in result.stderr
+
+
+def test_check_passes_when_tokens_generated_matches_expected(tmp_path):
+    """tokens_generated == expected → exit 0."""
+    baseline = _write_baseline(
+        tmp_path / "baseline.json",
+        tokens_generated_expected=64,  # matches default --n-tokens
+    )
+    result = _run_bench_with_check(baseline)
+    assert result.returncode == 0, (
+        f"expected exit 0, got {result.returncode}; stderr={result.stderr}"
+    )
+
+
+def test_check_fails_when_tokens_generated_differs_from_expected(tmp_path):
+    """tokens_generated != expected → non-zero exit + identifying message."""
+    baseline = _write_baseline(
+        tmp_path / "baseline.json",
+        tokens_generated_expected=999,  # default n-tokens is 64
+    )
+    result = _run_bench_with_check(baseline)
+    assert result.returncode != 0
+    assert "tokens_generated_expected" in result.stderr
+    assert "FAIL" in result.stderr
+
+
+def test_check_aggregates_multiple_failures(tmp_path):
+    """Multiple violations → all reported in one shot, single non-zero exit."""
+    baseline = _write_baseline(
+        tmp_path / "baseline.json",
+        min_tokens_per_sec=DRY_RUN_TOKENS_PER_SEC + 100.0,
+        max_wall_clock_seconds=0.001,
+        tokens_generated_expected=1,
+    )
+    result = _run_bench_with_check(baseline)
+    assert result.returncode != 0
+    # All three field names should appear in the failure message.
+    assert "min_tokens_per_sec" in result.stderr
+    assert "max_wall_clock_seconds" in result.stderr
+    assert "tokens_generated_expected" in result.stderr
+
+
+def test_check_with_empty_baseline_passes(tmp_path):
+    """No thresholds declared → trivially passes (partial-baseline workflow)."""
+    baseline = _write_baseline(tmp_path / "baseline.json")  # only schema_version
+    result = _run_bench_with_check(baseline)
+    assert result.returncode == 0
+
+
+# TODO(agent3-followup): Add negative tests for the schema validator
+# (malformed records: missing required field, tokens_per_second = -1, etc.)
+# tracked separately from this PR per Agent R review scope.

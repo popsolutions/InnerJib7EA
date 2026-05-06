@@ -89,6 +89,8 @@ def run_backend_llama_cpp_python(
             "Install it with: pip install llama-cpp-python==0.2.90"
         ) from e
 
+    # Model weights load (mmap + tokenizer init) happens here, in Llama().
+    # This is the heavy one-time cost we deliberately exclude from timing.
     llm = Llama(
         model_path=str(model_path),
         n_ctx=512,
@@ -97,7 +99,9 @@ def run_backend_llama_cpp_python(
         verbose=False,
     )
 
-    # Prompt eval (warm-up); we time decode only, per the README schema.
+    # First-call warm-up: this primes the KV cache and JITs any lazy paths
+    # inside llama.cpp. We discard the result; the timed call below is the
+    # actual measurement. (The Llama() ctor above already loaded weights.)
     _ = llm(prompt, max_tokens=1, echo=False)
 
     start = time.perf_counter()
@@ -136,13 +140,25 @@ def run_backend_llama_cli(
         "--log-disable",
     ]
 
+    # Generous per-token budget (10 s/tok) so we don't false-positive on a
+    # slow-but-progressing run, with a 60 s lower bound for tiny prompts.
+    timeout_seconds = max(60, n_tokens * 10)
+
     start = time.perf_counter()
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as e:
+        elapsed = time.perf_counter() - start
+        raise RuntimeError(
+            f"llama-cli timed out after {elapsed:.1f}s "
+            f"(budget {timeout_seconds}s) running: {' '.join(cmd)}"
+        ) from e
     elapsed = time.perf_counter() - start
 
     # llama-cli does not give us a clean token count; use the requested budget.
@@ -196,20 +212,75 @@ def build_record(
 
 
 def check_threshold(record: dict[str, Any], baseline_path: Path) -> tuple[bool, str]:
-    """Return (passed, message)."""
+    """Return (passed, message).
+
+    Every threshold field declared in ``baseline_path`` must hold against the
+    measured ``record``. Currently enforced fields:
+
+    * ``min_tokens_per_sec``  — measured tokens/s must be >= this floor.
+    * ``max_wall_clock_seconds`` — measured wall-clock must be <= this ceiling.
+    * ``tokens_generated_expected`` — measured ``tokens_generated`` must equal
+      this exactly. NOTE: this is only meaningful when ``--n-tokens`` matches
+      ``tokens_generated_expected``; otherwise the comparison is apples-to-
+      oranges and you should re-pin the baseline.
+
+    A field that is absent from the baseline is silently skipped (allows
+    partial baselines while iterating). All violations are collected and
+    reported together so a CI run surfaces every regression in one shot.
+    """
     try:
         baseline = json.loads(baseline_path.read_text())
     except (OSError, json.JSONDecodeError) as e:
         return False, f"could not load baseline {baseline_path}: {e}"
 
-    min_tps = float(baseline.get("min_tokens_per_sec", 0.0))
-    measured_tps = float(record["tokens_per_second"])
+    failures: list[str] = []
+    summary: list[str] = []
 
-    if measured_tps < min_tps:
-        return False, (
-            f"FAIL: measured {measured_tps:.2f} tok/s < threshold {min_tps:.2f} tok/s"
-        )
-    return True, f"PASS: measured {measured_tps:.2f} tok/s >= threshold {min_tps:.2f} tok/s"
+    if "min_tokens_per_sec" in baseline:
+        min_tps = float(baseline["min_tokens_per_sec"])
+        measured_tps = float(record["tokens_per_second"])
+        if measured_tps < min_tps:
+            failures.append(
+                f"min_tokens_per_sec: measured {measured_tps:.2f} tok/s "
+                f"< threshold {min_tps:.2f} tok/s"
+            )
+        else:
+            summary.append(
+                f"tokens_per_second {measured_tps:.2f} >= {min_tps:.2f}"
+            )
+
+    if "max_wall_clock_seconds" in baseline:
+        max_wall = float(baseline["max_wall_clock_seconds"])
+        measured_wall = float(record["wall_clock_seconds"])
+        if measured_wall > max_wall:
+            failures.append(
+                f"max_wall_clock_seconds: measured {measured_wall:.2f}s "
+                f"> ceiling {max_wall:.2f}s"
+            )
+        else:
+            summary.append(
+                f"wall_clock_seconds {measured_wall:.2f} <= {max_wall:.2f}"
+            )
+
+    if "tokens_generated_expected" in baseline:
+        expected_tokens = int(baseline["tokens_generated_expected"])
+        measured_tokens = int(record["tokens_generated"])
+        if measured_tokens != expected_tokens:
+            failures.append(
+                f"tokens_generated_expected: measured {measured_tokens} "
+                f"!= expected {expected_tokens} "
+                f"(tip: --n-tokens must match tokens_generated_expected)"
+            )
+        else:
+            summary.append(
+                f"tokens_generated {measured_tokens} == {expected_tokens}"
+            )
+
+    if failures:
+        return False, "FAIL: " + "; ".join(failures)
+    if not summary:
+        return True, "PASS: no thresholds declared in baseline"
+    return True, "PASS: " + "; ".join(summary)
 
 
 # --- CLI --------------------------------------------------------------------

@@ -81,12 +81,25 @@ fi
 
 log "Fetching ${MODEL_FILE} (~668 MB) from HuggingFace..."
 
+# Cleanup partial download on any non-rename exit (set -e + curl/wget fail
+# under -euo pipefail or a stray Ctrl-C). The mv at the end of the block
+# renames .partial → final, after which this trap is a no-op.
+trap 'rm -f "${TARGET_PATH}.partial"' EXIT
+
 if command -v curl >/dev/null 2>&1; then
+    # --connect-timeout: fail fast on dead DNS / unreachable HF.
+    # --max-time: 20 min absolute ceiling for the 668 MB download.
     curl --fail --location --progress-bar \
+        --connect-timeout 30 \
+        --max-time 1200 \
         --output "${TARGET_PATH}.partial" \
         "${MODEL_URL}"
 elif command -v wget >/dev/null 2>&1; then
-    wget --show-progress --output-document "${TARGET_PATH}.partial" \
+    # --timeout sets connect/read/dns; --read-timeout overrides for the body.
+    wget --show-progress \
+        --timeout=30 \
+        --read-timeout=600 \
+        --output-document "${TARGET_PATH}.partial" \
         "${MODEL_URL}"
 else
     log "ERROR: neither curl nor wget available"
