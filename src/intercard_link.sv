@@ -74,15 +74,22 @@ module intercard_link #(
     // Width-contract sanity: INTERCARD_LANES * INTERCARD_LANE_WIDTH must
     // equal 128 (INTERCARD_BUS_WIDTH per the MAST #14 contract). Any
     // override that breaks this contract will fail elaboration.
+    //
+    // NOTE on placement: $error sits directly in the generate body (NOT
+    // wrapped in `initial begin ... end`). Verilator `--lint-only` parses
+    // and elaborates the design but does NOT run `initial` blocks, so
+    // wrapping $error in `initial` would mask a contract violation under
+    // lint-only (issue #12). Generate-body $error is an IEEE 1800-2012
+    // elaboration-time construct and is enforced by Verilator at lint time.
     // ------------------------------------------------------------------
     localparam int INTERCARD_BUS_WIDTH = INTERCARD_LANES * INTERCARD_LANE_WIDTH;
 
-    initial begin
-        if (INTERCARD_BUS_WIDTH != 128) begin
+    generate
+        if (INTERCARD_BUS_WIDTH != 128) begin : g_width_contract_broken
             $error("intercard_link: INTERCARD_LANES (%0d) * INTERCARD_LANE_WIDTH (%0d) = %0d, expected 128 (MAST #14 contract).",
                    INTERCARD_LANES, INTERCARD_LANE_WIDTH, INTERCARD_BUS_WIDTH);
         end
-    end
+    endgenerate
 
     // ------------------------------------------------------------------
     // Stub body: tie outputs to safe defaults so synthesis/elab does not
