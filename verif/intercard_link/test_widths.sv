@@ -56,12 +56,19 @@ module test_widths;
     localparam int ACTUAL_BUS_WIDTH = 4 /* INTERCARD_LANES */ *
                                        32 /* INTERCARD_LANE_WIDTH */;
 
+    // $error sits DIRECTLY in the generate body (no `initial` wrapper).
+    // Lint-only mode does NOT run `initial` blocks, so wrapping would
+    // mask contract violations under lint-only (issue #12). The bare
+    // $error form is an IEEE 1800-2012 elaboration-time construct and
+    // is enforced at lint time.
+    //
+    // The "OK" branch retains `initial $display` because that path is
+    // observational, not a gate — when the contract holds, lint-only
+    // exits 0 and the display is a no-op (only meaningful under --binary).
     generate
         if (ACTUAL_BUS_WIDTH != EXPECT_BUS_WIDTH) begin : g_width_mismatch
-            // This $error fires at elaboration. Verilator surfaces it as
-            // an elaboration-time error and exits non-zero.
-            initial $error("intercard_link width contract broken: actual=%0d expected=%0d",
-                           ACTUAL_BUS_WIDTH, EXPECT_BUS_WIDTH);
+            $error("intercard_link width contract broken: actual=%0d expected=%0d",
+                   ACTUAL_BUS_WIDTH, EXPECT_BUS_WIDTH);
         end else begin : g_width_ok
             initial $display("[test_widths] INTERCARD_BUS_WIDTH = %0d (matches MAST #14 contract)",
                              ACTUAL_BUS_WIDTH);
