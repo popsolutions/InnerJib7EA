@@ -18,8 +18,11 @@ SRC="${REPO_ROOT}/src/intercard_link.sv"
 TB="${REPO_ROOT}/verif/intercard_link/test_widths.sv"
 
 if ! command -v verilator >/dev/null 2>&1; then
-    echo "[run_lint] verilator not found in PATH; skipping (CI-only smoke)." >&2
-    exit 0
+    echo "[run_lint] verilator not found in PATH; SKIPPING the width-contract gate." >&2
+    echo "[run_lint] CI must install Verilator before invoking this script." >&2
+    # Exit 77 = POSIX skip code (recognised by automake/autotest and many CIs).
+    # Hard-fail rather than silent-pass: the gate is silent-skipped, not green.
+    exit 77
 fi
 
 echo "[run_lint] verilator $(verilator --version | head -1)"
