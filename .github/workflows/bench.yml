@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: CC-BY-SA-4.0
+name: bench
+
+# Manual-dispatch only. The model fetch (~668 MB) + decode (~minutes) is too
+# heavy to run on every PR; we'd swamp the existing Verilator/cocotb job in
+# ci.yml. Trigger this from the Actions tab when you want a fresh baseline
+# measurement (e.g., after a llama-cpp-python bump or a runner OS upgrade).
+on:
+  workflow_dispatch:
+    inputs:
+      n_tokens:
+        description: "Number of tokens to decode for the timing measurement"
+        required: false
+        default: "64"
+
+# Default least-privilege token scope for the entire workflow. The job does
+# not push to the repo, only reads source and uploads an artifact (which uses
+# the run's own implicit scope, not contents:write).
+permissions:
+  contents: read
+
+jobs:
+  tinyllama-baseline:
+    name: TinyLlama-1.1B Q4_0 baseline (x86 CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      # Action versions pinned to commit SHA — `@v4` style tags are mutable
+      # and a compromised tag in any of these repos would land in our runner.
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache TinyLlama GGUF model
+        id: model-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: bench/tinyllama-1.1b/tinyllama-1.1b-chat-v1.0.Q4_0.gguf
+          key: tinyllama-1.1b-chat-v1.0-Q4_0-gguf-v1
+
+      - name: Fetch TinyLlama model (cache miss only)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        env:
+          # Bootstrap: skip SHA256 verification on first run so we can capture
+          # the canonical hash from the logs and pin it in fetch_model.sh.
+          # Remove this env once EXPECTED_SHA256 is updated in the script.
+          EXPECTED_SHA256: ""
+        run: |
+          cd bench/tinyllama-1.1b
+          chmod +x ./fetch_model.sh
+          ./fetch_model.sh
+          echo "Computed SHA256 (record this and pin in fetch_model.sh):"
+          sha256sum tinyllama-1.1b-chat-v1.0.Q4_0.gguf
+
+      - name: Install bench dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # llama-cpp-python pinned to a known-good CPU build.
+          # Pre-built wheel exists for ubuntu-24.04 x86_64.
+          pip install "llama-cpp-python==0.2.90" pytest
+
+      - name: Run schema tests (fast, no model)
+        run: |
+          cd bench/tinyllama-1.1b
+          python -m pytest test_bench.py -v
+
+      - name: Run TinyLlama bench and check threshold
+        # `${{ inputs.* }}` interpolation in `run:` blocks is workflow-script
+        # injection if the value isn't a clean integer (Actions templating
+        # happens before the shell parses the line — argparse `type=int`
+        # cannot save us). Route through env + validate before use.
+        env:
+          N_TOKENS: ${{ inputs.n_tokens || '64' }}
+        run: |
+          [[ "$N_TOKENS" =~ ^[0-9]+$ ]] || { echo "ERROR: n_tokens must be a positive integer, got: $N_TOKENS"; exit 1; }
+          cd bench/tinyllama-1.1b
+          python bench.py \
+            --model tinyllama-1.1b-chat-v1.0.Q4_0.gguf \
+            --backend llama-cpp-python \
+            --n-tokens "$N_TOKENS" \
+            --check expected_baseline.json \
+            | tee bench-result.json
+
+      - name: Upload bench result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: tinyllama-bench-result
+          path: bench/tinyllama-1.1b/bench-result.json
+          if-no-files-found: warn
+          retention-days: 90
