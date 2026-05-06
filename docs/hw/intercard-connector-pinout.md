@@ -78,7 +78,7 @@ GND pin count is sized for differential return-current integrity, not
 for power delivery. Convention: **1 GND pin between every adjacent
 differential pair** for crosstalk isolation, plus 2 GND pins at each
 end of the connector for shielding. With 4 TX pairs + 4 RX pairs +
-1 CLK pair = 9 differential pairs, that is **9 GND-between + 4 GND-end
+1 CLK pair = 9 differential pairs, that is **10 GND-between + 3 GND-end
 = 13 GND pins** (rounding up to keep the ground plane stitched).
 
 ### 2.3 Total pin count
@@ -94,7 +94,7 @@ connector** (5 spare pins reserved, marked `RSVD` in the pinout below).
 | Option | Pitch | Density | Mating cycles | Cost / pair | JLCPCB stock | Notes |
 |---|---|---|---|---|---|---|
 | Samtec QSE-040 / QTE-040 | 0.8 mm | 80-pin (40+40 dual-row) | 100+ | ~USD 4–6 | LCSC carries equivalents | Industrial standard, official KiCad lib from Samtec. |
-| Hirose FX23-40S         | 0.5 mm | 40-pin single-row mezzanine | 50  | ~USD 3 | Yes (LCSC C2675473)   | Smaller, lower mating cycles. |
+| Hirose FX23-40S         | 0.5 mm | 40-pin dual-row mezzanine   | 50  | ~USD 3 | Yes (LCSC C2675473)   | Smaller, lower mating cycles. |
 | Hirose DF40C-40DS       | 0.4 mm | 40-pin board-to-board | 30  | ~USD 1.5 | Yes (LCSC C124589)    | Cheapest, but tightest pitch — 4-layer PCB minimum to fan out. |
 | 2x20 0.1" header        | 2.54 mm | 40-pin through-hole | many | <USD 0.5 | Yes (LCSC C2845749)   | Cheap and rugged but huge footprint and not high-speed friendly. |
 
@@ -308,7 +308,7 @@ is asserted by the smoke-test in `verif/intercard_link/`.
 | Stream | Impact | Action |
 |---|---|---|
 | 1 (RTL) | The `intercard_link` module port surface is the contract that the MAST `interconnect` block wraps. | Issue filed in MAST repo: cross-stream coordination. |
-| 3 (Spanker) | Bandwidth model: 4 lanes × ~1.25 Gbps = ~5 Gbps aggregate per direction = ~625 MB/s per direction (8b/10b). Spanker's TP/MP scheduler uses this number. | Issue filed in Spanker repo: please assert against this number. |
+| 3 (Spanker) | Bandwidth model: 4 lanes × ~1.25 Gbps = ~5 Gbps raw aggregate per direction. With 8b/10b coding (the baseline assumption — see ADR-002): effective ~4 Gbps = **~500 MB/s per direction**. With 64b/66b (alternate, deferred to ADR-014): ~600 MB/s per direction. Spanker's TP/MP scheduler must model both until ADR-014 lands. | Issue filed in Spanker repo: please assert against this number. |
 | 4 (Upstream) | None — this connector predates any upstream Litex/LiteEth work. | No action. |
 
 ## 10. Open follow-ups
